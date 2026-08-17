@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pymeshb"
+version = "0.1.0"
+description = "Python ctypes wrapper around the libMeshb (GMF) mesh I/O library"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+authors = [
+    { name = "albiremo" },
+]
+keywords = ["mesh", "gmf", "libmeshb", "ctypes", "meshb"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "numpy",
+]
+
+[project.urls]
+Homepage = "https://github.com/LoicMarechal/libMeshb"
+
+[tool.setuptools]
+py-modules = ["pymeshb"]
+package-dir = { "" = "src" }
