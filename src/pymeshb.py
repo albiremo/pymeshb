@@ -62,6 +62,15 @@ from typing import Optional, Dict, Any, List, Tuple
 
 import numpy as np
 
+try:
+    import warp as wp
+    _HAS_WARP = True
+    print("[pymeshb] library running with gpu support - NVIDIA warp")
+except ImportError:
+    wp = None
+    _HAS_WARP = False
+    print("[pymeshb] library running without gpu support - NVIDIA warp")
+
 
 # ---------------------------------------------------------------------------
 # GMF constants (from libmeshb8.h)
@@ -495,10 +504,12 @@ def _call_get_block(lib, lib_idx: int, kwd_int: int,
         row_stride = ncols * elem_sz       # bytes per row (= step to next element)
 
         for col in range(ncols):
+            begin_addr = arr_base + col * elem_sz
+            end_addr   = arr_base + (n_elem - 1) * row_stride + col * elem_sz
             args += [
                 ctypes.c_int(gmf_type),
-                ctypes.c_size_t(row_stride),
-                _c_void_p_offset(arr_base, col * elem_sz),
+                _c_void_p_offset(begin_addr, 0),
+                _c_void_p_offset(end_addr, 0),
             ]
         arrays[label] = arr
 
@@ -612,10 +623,12 @@ def _read_sol_kwd_block(lib, lib_idx: int, kwd_name: str, kwd_int: int,
 
     args = []
     for col in range(sol_size):
+        begin_addr = base + col * 8
+        end_addr   = base + (n_elem - 1) * row_stride + col * 8
         args += [
             ctypes.c_int(_GMF_DOUBLE),
-            ctypes.c_size_t(row_stride),
-            _c_void_p_offset(base, col * 8),
+            _c_void_p_offset(begin_addr, 0),
+            _c_void_p_offset(end_addr, 0),
         ]
 
     lib.GmfGetBlock(
@@ -665,12 +678,26 @@ def _read_bounding_box(lib, lib_idx: int, kwd_int: int, dim: int
 
 
 # ---------------------------------------------------------------------------
+# GPU residency helper
+# ---------------------------------------------------------------------------
+
+def _to_warp(obj: Any, device: str = "cuda") -> Any:
+    """Recursively replace numpy arrays in a mesh dict with GPU-resident wp.arrays."""
+    if isinstance(obj, dict):
+        return {k: _to_warp(v, device) for k, v in obj.items()}
+    if isinstance(obj, np.ndarray):
+        return wp.array(obj, device=device)
+    return obj
+
+
+# ---------------------------------------------------------------------------
 # Main reader
 # ---------------------------------------------------------------------------
 
 def read_mesh(filepath: str,
               keywords: Optional[List[str]] = None,
-              verbose: bool = False) -> Dict[str, Any]:
+              verbose: bool = False,
+              gpu: bool = False) -> Dict[str, Any]:
     """
     Read a GMF mesh file into a dictionary.
 
@@ -683,6 +710,10 @@ def read_mesh(filepath: str,
         By default every keyword present in the file is read.
     verbose : bool
         Print progress information.
+    gpu : bool
+        If True, every numpy array in the returned dict is aliased into a
+        GPU-resident `warp.array` (device="cuda") instead of plain numpy.
+        Requires NVIDIA Warp to be installed.
 
     Returns
     -------
@@ -692,14 +723,21 @@ def read_mesh(filepath: str,
           "Dimension" → int
           "Version"   → int
           All others  → see module docstring for layout.
+        When `gpu=True`, array-valued entries are `warp.array` on the GPU
+        instead of `numpy.ndarray`.
 
     Raises
     ------
     FileNotFoundError
         If `filepath` does not exist.
     RuntimeError
-        If the library cannot be found or the file cannot be opened.
+        If the library cannot be found or the file cannot be opened, or if
+        `gpu=True` but NVIDIA Warp is not installed.
     """
+    if gpu and not _HAS_WARP:
+        raise RuntimeError(
+            "gpu=True requires NVIDIA Warp to be installed (`pip install warp-lang`)."
+        )
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Mesh file not found: {filepath}")
 
@@ -747,7 +785,7 @@ def read_mesh(filepath: str,
                 continue  # not present in file
 
             if verbose:
-                print(f"[pymeshb]   {kwd_name}: {n_elem} element(s)")
+                print(f"[pymeshb]   {kwd_name}: {n_elem} ")
 
             # ── Scalar keywords ────────────────────────────────────────────
             if kwd_name in _SCALAR_KWDS:
@@ -798,6 +836,9 @@ def read_mesh(filepath: str,
 
     finally:
         lib.GmfCloseMesh(ctypes.c_int64(lib_idx))
+
+    if gpu:
+        mesh = _to_warp(mesh)
 
     return mesh
 
